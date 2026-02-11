@@ -1,4 +1,4 @@
-import { registerSchema } from "../config/zod.js"
+import { loginSchema, registerSchema } from "../config/zod.js"
 import { redisClient } from "../index.js";
 import asyncHandler from "../middlewares/asyncHandler.js"
 import sanitize from "mongo-sanitize"
@@ -6,7 +6,8 @@ import { User } from "../models/user.model.js";
 import bcrypt from "bcrypt"
 import crypto from "crypto"
 import sendMail from "../config/sendMail.js";
-import { getVerifyEmailHtml } from "../config/html.js";
+import { getOtpHtml, getVerifyEmailHtml } from "../config/html.js";
+import { generateToken } from "../config/generateToken.js";
 
 export const registerUser = asyncHandler(async (req, res) => {
 
@@ -112,3 +113,109 @@ export const verifyUser = asyncHandler(async(req,res)=>{
     })
 })
 
+
+export const loginUser = asyncHandler(async(req,res)=>{
+    const sanitizedBody = sanitize(req.body);
+
+    const validation = loginSchema.safeParse(sanitizedBody);
+
+    if (!validation.success) {
+
+        const allErrors = validation.error.issues.map((issue) => ({
+            field: issue.path.join("."),
+            message: issue.message,
+            code: issue.code
+        }));
+
+        return res.status(400).json({
+            message: allErrors[0]?.message || "Validation error",
+            errors: allErrors
+        });
+    }
+
+    const {  email, password } = validation.data;
+
+    const rateLimitKey = `login-rate-limit:${req.ip}:${req.email}`
+
+    if (await redisClient.get(rateLimitKey)) {
+        return res.status(429).json({
+            message: "Too many requests"
+        })
+    }
+
+    const user = await User.findOne({email})
+
+    if(!user){
+        return res.status(400).json({
+            message:"Invalid credentials"
+        })
+    }
+
+    const comparedPassword = await bcrypt.compare(password,user.password)
+
+    if(!comparedPassword){
+        return res.status(400).json({
+            message:"Invalid credentials"
+        })
+    }
+
+    const otp = Math.floor(100000 + Math.random() * 900000).toString()
+
+    const otpKey = `otp:${email}`;
+
+    await redisClient.set(otpKey,JSON.stringify(otp),{EX:300});
+
+    const subject = "otp for verification"
+
+    const html = getOtpHtml({email,otp})
+
+    await sendMail({email, subject, html})
+
+    await redisClient.set(rateLimitKey,"true",{EX:60})
+
+    res.json({
+        message:"if your email is valid, an otp is send, it will be valid for 5 minute"
+    })
+})
+
+export const verifyOtp = asyncHandler(async(req,res)=>{
+    const {email,otp} = req.body;
+
+    if(!email || !otp){
+        return res.status(400).json({
+            message:"please provide all details for verification"
+        })
+    }
+
+    const otpKey = `otp:${email}`
+
+    const storedOtpString = await redisClient.get(otpKey)
+
+    if(!storedOtpString){
+        return res.status(400).json({
+            message:"otp expired"
+        })
+    }
+
+    const storedOtp = JSON.parse(storedOtpString)
+
+    if(storedOtp !== otp){
+        return res.status(400).json({
+            message:"invalid otp"
+        })
+    }
+
+    await redisClient.del(otpKey)
+
+    let user = await User.findOne({email})
+
+    //once 2FA is done by verifying otp give the user token
+    const tokenData = await generateToken(user._id, res);
+
+    res.status(200).json({
+        message:`welcome ${user.name}`,
+        user,
+        
+    })
+
+})
