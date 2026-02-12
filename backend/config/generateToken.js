@@ -10,6 +10,8 @@ export const generateToken = async(id,res) => {
         expiresIn: "7d"
     })
 
+    
+
     //store in redis too so that we can verify if user has logged in to a new device
     // if logged in another device the previous refresh token will be deleted from redis after storing new one 
 
@@ -24,12 +26,44 @@ export const generateToken = async(id,res) => {
         maxAge: 1*60*1000,
     })
 
-    res.cookie("refrshToken",refreshToken,{
+    res.cookie("refreshToken",refreshToken,{
         maxAge: 7*24*60*60*1000,
         httpOnly:true,
         sameSite:"none",
-        secure:true
+        //secure:true
     })
 
     return {accessToken, refreshToken}
+}
+
+export const verifyRefreshToken = async(refreshToken) => {
+    try {
+        const decode = jwt.verify(refreshToken,process.env.REFRESH_SECRET)
+
+        const storedToken = await redisClient.get(`refresh_token:${decode.id}`)
+
+
+        if(storedToken === refreshToken){
+            return decode
+        }
+
+        return null
+    } catch (error) {
+        return null
+    }
+}
+
+export const generateAccessToken = async(id,res)=>{
+    const accessToken = jwt.sign({id},process.env.JWT_SECRET,{
+        expiresIn:"1m"
+    })
+
+    res.cookie("accessToken",accessToken,{
+        httpOnly:true,
+        //secure:true,
+        sameSite:"strict",
+        maxAge: 1*60*1000,
+    })
+
+
 }

@@ -7,7 +7,7 @@ import bcrypt from "bcrypt"
 import crypto from "crypto"
 import sendMail from "../config/sendMail.js";
 import { getOtpHtml, getVerifyEmailHtml } from "../config/html.js";
-import { generateToken } from "../config/generateToken.js";
+import { generateAccessToken, generateToken, verifyRefreshToken } from "../config/generateToken.js";
 
 export const registerUser = asyncHandler(async (req, res) => {
 
@@ -215,7 +215,58 @@ export const verifyOtp = asyncHandler(async(req,res)=>{
     res.status(200).json({
         message:`welcome ${user.name}`,
         user,
-        
+
     })
 
+})
+
+export const myProfile = asyncHandler(async(req,res)=>{
+    const user = req.user
+
+    res.json(user)
+})
+
+export const refreshToken = asyncHandler(async(req,res)=>{
+    const refreshToken = req.cookies.refreshToken;
+
+
+    
+    if(!refreshToken){
+        return res.status(400).json({
+            message:"Invalid refresh token"
+        })
+    }
+
+    const decode = await verifyRefreshToken(refreshToken)
+
+    if(!decode){
+        return res.status(400).json({
+            message:"Invalid refresh token 111"
+        })
+    }
+
+    generateAccessToken(decode.id,res);
+
+    res.status(200).json({
+        message:"token refreshed"
+    })
+})
+
+export const revokeRefreshToken = asyncHandler(async(userId)=>{
+    await redisClient.del(`refresh_token:${userId}`)
+})
+
+export const logoutUser = asyncHandler(async(req,res)=>{
+    const userId = req.user._id;
+
+    await revokeRefreshToken(userId);
+
+    res.clearCookie("refreshToken")
+    res.clearCookie("accessToken")
+
+    await redisClient.del(`user:${userId}`)
+
+    res.json({
+        message:"logged out successfully"
+    })
 })
